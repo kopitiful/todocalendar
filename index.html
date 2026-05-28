@@ -1,0 +1,426 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Tages-Copilot</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #fff;
+      color: #111;
+      height: 100dvh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    #feed {
+      flex: 1;
+      overflow-y: auto;
+      padding: 48px 24px 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      max-width: 640px;
+      width: 100%;
+      margin: 0 auto;
+    }
+
+    /* ── Nutzernachricht ── */
+    .msg.user {
+      align-self: flex-end;
+      font-size: 0.95rem;
+      display: flex;
+      align-items: flex-end;
+      gap: 5px;
+    }
+
+    /* ── Haken ── */
+    .ticks {
+      display: inline-flex;
+      align-items: center;
+      gap: 0;
+      flex-shrink: 0;
+      margin-bottom: 1px;
+    }
+    /* Einzelner Haken: nur erstes SVG sichtbar */
+    .ticks svg { width: 16px; height: 11px; }
+    .ticks svg path { stroke: #aaa; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+
+    /* Zwei graue Haken */
+    .ticks.delivered svg path { stroke: #aaa; }
+
+    /* Zwei blaue Haken */
+    .ticks.read svg path { stroke: #4fc3f7; }
+
+    /* Zweiter Haken beim single-tick ausblenden */
+    .ticks.sent .second { display: none; }
+
+    /* ── Systemantwort (nur Abfragen) ── */
+    .msg.system {
+      align-self: flex-start;
+      font-size: 0.88rem;
+      color: #333;
+      line-height: 1.6;
+    }
+    .msg.system .label {
+      font-size: 0.7rem;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: #aaa;
+      margin-bottom: 6px;
+    }
+    .msg.system .row {
+      display: flex;
+      gap: 10px;
+    }
+    .msg.system .time {
+      color: #bbb;
+      min-width: 34px;
+      font-size: 0.82rem;
+    }
+    .msg.system .sep { height: 6px; }
+    .msg.system.error { color: #c00; font-size: 0.85rem; }
+
+    /* ── Erinnerungs-Banner ── */
+    #reminder {
+      display: none;
+      position: fixed;
+      top: 16px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: #111;
+      color: #fff;
+      font-size: 0.85rem;
+      padding: 10px 18px;
+      border-radius: 8px;
+      z-index: 100;
+      cursor: pointer;
+    }
+
+    /* ── Platzhalter ── */
+    #placeholder {
+      margin: auto;
+      color: #ddd;
+      font-size: 0.9rem;
+      pointer-events: none;
+    }
+
+    /* ── Eingabe ── */
+    #bar {
+      border-top: 1px solid #f0f0f0;
+      padding: 14px 24px;
+      display: flex;
+      gap: 10px;
+      max-width: 640px;
+      width: 100%;
+      margin: 0 auto;
+    }
+    #input {
+      flex: 1;
+      border: none;
+      outline: none;
+      font-size: 0.95rem;
+      font-family: inherit;
+      color: #111;
+      background: transparent;
+      resize: none;
+      height: 24px;
+      line-height: 24px;
+    }
+    #input::placeholder { color: #ccc; }
+    #send {
+      border: none;
+      background: none;
+      cursor: pointer;
+      color: #bbb;
+      font-size: 1.1rem;
+      padding: 0 4px;
+      line-height: 24px;
+      transition: color 0.15s;
+    }
+    #send:hover { color: #333; }
+    #send:disabled { color: #e0e0e0; cursor: default; }
+
+    /* ── Löschen / Verschieben ── */
+    .deleting {
+      opacity: 0;
+      transform: scale(0.96);
+      transition: opacity 0.2s ease, transform 0.2s ease;
+      pointer-events: none;
+    }
+    .deletable  { cursor: pointer; }
+    .postponable { cursor: pointer; }
+
+    /* Verschiebe-Zähler */
+    .pcount {
+      font-size: 0.7rem;
+      color: #ccc;
+      margin-left: 4px;
+    }
+    .pcount.warn { color: #f59e0b; }
+
+    /* Gesperrte Aufgabe (3× verschoben) */
+    .locked-task {
+      text-decoration: line-through;
+      color: #bbb;
+      cursor: default;
+    }
+
+    /* Toast-Warnung */
+    #toast {
+      display: none;
+      position: fixed;
+      bottom: 72px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: #f59e0b;
+      color: #fff;
+      font-size: 0.82rem;
+      padding: 8px 16px;
+      border-radius: 6px;
+      z-index: 100;
+      white-space: nowrap;
+    }
+  </style>
+</head>
+<body>
+
+<div id="reminder" onclick="this.style.display='none'"></div>
+<div id="toast"></div>
+<div id="feed">
+  <p id="placeholder">Was steht heute an?</p>
+</div>
+
+<div id="bar">
+  <textarea id="input" placeholder="Meeting, Aufgabe, Frage …" rows="1"></textarea>
+  <button id="send">↑</button>
+</div>
+
+<script>
+  const feed  = document.getElementById('feed');
+  const input = document.getElementById('input');
+  const send  = document.getElementById('send');
+
+  // ── Haken-SVG ─────────────────────────────────────────────
+  const TICK = `<svg viewBox="0 0 16 11"><path d="M1 5.5 L5.5 10 L15 1"/></svg>`;
+  const DOUBLE_TICK = `
+    <svg viewBox="0 0 16 11" style="margin-right:-7px"><path d="M1 5.5 L5.5 10 L15 1"/></svg>
+    <svg viewBox="0 0 16 11" class="second"><path d="M1 5.5 L5.5 10 L15 1"/></svg>`;
+
+  // ── Toast ──────────────────────────────────────────────────
+  let toastTimer;
+  function showToast(msg, color = '#f59e0b') {
+    const t = document.getElementById('toast');
+    t.textContent = msg;
+    t.style.background = color;
+    t.style.display = 'block';
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => { t.style.display = 'none'; }, 3000);
+  }
+
+  // ── Aufgabe verschieben (1 Klick) ─────────────────────────
+  async function postponeTask(row, id, currentCount) {
+    if (currentCount >= 3) {
+      showToast('Nicht mehr verschiebbar.', '#999');
+      return;
+    }
+    row.style.pointerEvents = 'none';
+    const res  = await fetch(`/entry/task/${id}/postpone`, { method: 'PATCH' });
+    const data = await res.json();
+
+    if (data.count === 3) {
+      showToast('⚠️ Letzte mal verschoben!');
+    }
+    // Zeile ausblenden (Aufgabe ist jetzt morgen)
+    row.classList.add('deleting');
+    setTimeout(() => row.remove(), 220);
+  }
+
+  // ── Doppelklick löscht Element ────────────────────────────
+  async function softDelete(el, dtype, id) {
+    el.classList.add('deleting');
+    await fetch(`/entry/${dtype}/${id}`, { method: 'DELETE' });
+    setTimeout(() => el.remove(), 220);
+  }
+
+  function makeDeletable(el, dtype, id) {
+    el.classList.add('deletable');
+    el.title = 'Doppelklick zum Entfernen';
+    el.addEventListener('dblclick', () => softDelete(el, dtype, id));
+  }
+
+  function addUserMsg(text) {
+    document.getElementById('placeholder')?.remove();
+    const el = document.createElement('div');
+    el.className = 'msg user';
+    el.innerHTML = `<span>${escHtml(text)}</span><span class="ticks sent">${DOUBLE_TICK}</span>`;
+    feed.appendChild(el);
+    feed.scrollTop = feed.scrollHeight;
+    return el.querySelector('.ticks');
+  }
+
+  // Nachricht rückwirkend mit Delete-Handler versehen (nach DB-Speicherung)
+  function attachDeleteToLastUserMsg(dtype, id) {
+    const msgs = feed.querySelectorAll('.msg.user');
+    const last = msgs[msgs.length - 1];
+    if (last) makeDeletable(last, dtype, id);
+  }
+
+  function setTick(el, state) {
+    el.className = 'ticks ' + state; // sent | delivered | read
+  }
+
+  function addSystemMsg(html) {
+    const el = document.createElement('div');
+    el.className = 'msg system';
+    el.innerHTML = html;
+    feed.appendChild(el);
+    feed.scrollTop = feed.scrollHeight;
+  }
+
+  // ── Submit ─────────────────────────────────────────────────
+  async function submit() {
+    const text = input.value.trim();
+    if (!text) return;
+
+    const ticks = addUserMsg(text);
+    input.value = '';
+    input.style.height = '24px';
+    send.disabled = true;
+
+    try {
+      // Senden → 1 grauer Haken
+      setTick(ticks, 'sent');
+
+      const res = await fetch('/parse', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ text }),
+      });
+
+      // Angekommen → 2 graue Haken
+      setTick(ticks, 'delivered');
+
+      const data = await res.json();
+
+      if (data.error) {
+        addSystemMsg(`<span class="error">${escHtml(data.error)}</span>`);
+        return;
+      }
+
+      // Verarbeitet → 2 blaue Haken
+      setTick(ticks, 'read');
+
+      // Bei Termin/Aufgabe: blaue Haken + Doppelklick auf die Nachricht
+      if (data.type === 'event' || data.type === 'task') {
+        attachDeleteToLastUserMsg(data.type, data.id);
+      }
+
+      // Bei Abfragen: Ergebnis als löschbare Zeilen anzeigen
+      if (data.type === 'query') {
+        const evs = data.events || [];
+        const tks = data.tasks  || [];
+        const wrap = document.createElement('div');
+        wrap.className = 'msg system';
+
+        const lbl = document.createElement('div');
+        lbl.className = 'label';
+        lbl.textContent = data.label;
+        wrap.appendChild(lbl);
+
+        if (evs.length === 0 && tks.length === 0) {
+          const r = document.createElement('div');
+          r.className = 'row';
+          r.innerHTML = `<span class="time">–</span>Keine Einträge`;
+          wrap.appendChild(r);
+        }
+
+        evs.forEach(ev => {
+          const r = document.createElement('div');
+          r.className = 'row deletable';
+          r.title = 'Doppelklick zum Entfernen';
+          r.innerHTML = `<span class="time">${escHtml(ev.time)}</span>${escHtml(ev.title)}`;
+          r.addEventListener('dblclick', () => softDelete(r, 'event', ev.id));
+          wrap.appendChild(r);
+        });
+
+        if (tks.length > 0) {
+          if (evs.length > 0) { const s = document.createElement('div'); s.className='sep'; wrap.appendChild(s); }
+          const dot = { high: '●', medium: '◐', low: '○' };
+          tks.forEach(tk => {
+            const r   = document.createElement('div');
+            const locked = tk.postpone_count >= 3;
+            r.className = 'row' + (locked ? ' locked-task' : ' deletable postponable');
+
+            // Verschiebe-Zähler anzeigen (nur wenn > 0)
+            let badge = '';
+            if (tk.postpone_count > 0 && !locked) {
+              const warn = tk.postpone_count === 2 ? ' warn' : '';
+              badge = `<span class="pcount${warn}">+${tk.postpone_count}</span>`;
+            }
+            r.innerHTML = `<span class="time">${dot[tk.priority]||'·'}</span>${escHtml(tk.title)}${badge}`;
+
+            if (!locked) {
+              r.title = 'Klick: auf morgen · Doppelklick: löschen';
+              r.addEventListener('click',    () => postponeTask(r, tk.id, tk.postpone_count));
+              r.addEventListener('dblclick', e  => { e.stopPropagation(); softDelete(r, 'task', tk.id); });
+            } else {
+              r.title = 'Nicht mehr verschiebbar · Doppelklick: löschen';
+              r.addEventListener('dblclick', () => softDelete(r, 'task', tk.id));
+            }
+            wrap.appendChild(r);
+          });
+        }
+
+        document.getElementById('placeholder')?.remove();
+        feed.appendChild(wrap);
+        feed.scrollTop = feed.scrollHeight;
+      }
+
+    } catch {
+      addSystemMsg('<span class="error">Verbindungsfehler.</span>');
+    } finally {
+      send.disabled = false;
+      input.focus();
+    }
+  }
+
+  send.addEventListener('click', submit);
+  input.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit(); }
+  });
+  input.addEventListener('input', () => {
+    input.style.height = '24px';
+    input.style.height = input.scrollHeight + 'px';
+  });
+
+  // ── Erinnerungen ───────────────────────────────────────────
+  const banner   = document.getElementById('reminder');
+  const notified = new Set();
+
+  async function checkReminders() {
+    try {
+      const data = await fetch('/reminders').then(r => r.json());
+      const list = (data.reminders || []).filter(r => !notified.has(r.title + r.time));
+      if (!list.length) return;
+      list.forEach(r => notified.add(r.title + r.time));
+      banner.textContent = '⏰ ' + list.map(r => `${r.time} · ${r.title}`).join('  ');
+      banner.style.display = 'block';
+      setTimeout(() => { banner.style.display = 'none'; }, 10000);
+    } catch {}
+  }
+
+  checkReminders();
+  setInterval(checkReminders, 60_000);
+
+  function escHtml(s) {
+    return String(s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+</script>
+</body>
+</html>
