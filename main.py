@@ -69,7 +69,7 @@ async def parse(payload: InputPayload):
         return {
             "type":   "query",
             "label":  label,
-            "events": [{"id": e["id"], "title": e["title"], "time": e["start_time"][11:16]} for e in events],
+            "events": [{"id": e["id"], "title": e["title"], "time": e["start_time"].strftime("%H:%M")} for e in events],
             "tasks":  [{"id": t["id"], "title": t["title"], "priority": t["priority"], "postpone_count": t["postpone_count"]} for t in tasks],
         }
 
@@ -95,7 +95,7 @@ async def delete_entry(dtype: str, entry_id: int):
 @app.get("/reminders")
 async def reminders():
     items = db.get_upcoming_reminders(within_minutes=30)
-    return {"reminders": [{"title": r["title"], "time": r["start_time"][11:16]} for r in items]}
+    return {"reminders": [{"title": r["title"], "time": r["start_time"].strftime("%H:%M")} for r in items]}
 
 
 @app.get("/", response_class=HTMLResponse)
