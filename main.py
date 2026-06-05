@@ -92,6 +92,17 @@ async def delete_entry(dtype: str, entry_id: int):
     return {"ok": True}
 
 
+@app.get("/today")
+async def today():
+    from datetime import date
+    today_str = date.today().isoformat()
+    events, tasks = db.get_for_range(today_str, today_str)
+    return {
+        "events": [{"id": e["id"], "title": e["title"], "time": e["start_time"].strftime("%H:%M")} for e in events],
+        "tasks":  [{"id": t["id"], "title": t["title"], "priority": t["priority"], "postpone_count": t["postpone_count"]} for t in tasks],
+    }
+
+
 @app.get("/reminders")
 async def reminders():
     items = db.get_upcoming_reminders(within_minutes=30)
